@@ -12,6 +12,10 @@
 */
 
 #include <pebble.h>
+#include <string.h>
+#include <ctype.h>
+#include <stdlib.h>
+
 
 #define DEBUG 0
 
@@ -70,6 +74,7 @@ static void vibes_pwm(int8_t strength, uint16_t duration, bool twice);
 static char *upcase (char *str);
 static void editTextLayer (TextLayer *layer, GRect location, GColor colour, GColor background, GFont font, GTextAlignment alignment);
 static char *getDateString(bool four, unsigned char mode);
+static char *convertTimeFmt(char *time_12, char *time_tmp, size_t time_tmp_len, int mode);
 
 
 // -----------------
@@ -1096,8 +1101,21 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
 			snprintf(weather.tempCur, sizeof(weather.tempCur), "%s", t_weather[1]->value->cstring);
 			snprintf(weather.tempMin, sizeof(weather.tempMin), "%s", t_weather[2]->value->cstring);
 			snprintf(weather.tempMax, sizeof(weather.tempMax), "%s", t_weather[3]->value->cstring);
-			snprintf(weather.sunrise, sizeof(weather.sunrise), "%s", t_weather[7]->value->cstring);
-			snprintf(weather.sunset, sizeof(weather.sunset), "%s", t_weather[8]->value->cstring);
+
+			// Perform 12 hour to 24 hour conversion for sunrise and sunset items
+			char weather_time_tmp[10];
+			
+			snprintf(weather.sunrise, sizeof(weather.sunrise), "%s",
+				 convertTimeFmt(t_weather[7]->value->cstring,
+						weather_time_tmp,
+						sizeof(weather_time_tmp),
+						clock_is_24h_style()));
+			snprintf(weather.sunset, sizeof(weather.sunset), "%s",
+				 convertTimeFmt(t_weather[8]->value->cstring,
+						weather_time_tmp,
+						sizeof(weather_time_tmp),
+						clock_is_24h_style()));
+			
 			snprintf(weather.condMain, sizeof(weather.condMain), "%s", t_weather[15]->value->cstring);
 			snprintf(weather.condDesc, sizeof(weather.condDesc), "%s", t_weather[16]->value->cstring);
 			snprintf(weather.condForecast, sizeof(weather.condForecast), "%s", t_weather[14]->value->cstring);
@@ -1379,3 +1397,83 @@ static char *getDateString(bool four, unsigned char mode) {
 		else if (mode == 2) {snprintf(dateStringBuffer, sizeof(dateStringBuffer), (conf.dateStyle == 1 || conf.dateStyle == 3 || conf.dateStyle == 5 || conf.dateStyle == 6) ? "%2d":"%02d" ,tick_time->tm_mday);}
 	return dateStringBuffer;
 }
+
+
+
+// Shim function to convert a string containing a timestamp
+// from 12 hours to 24 hours
+static char *convertTimeFmt(char *time_12, char *time_tmp, size_t time_tmp_len, int mode) {    
+
+    unsigned char period_markers[] = "aApP";
+    unsigned char period = 0;
+
+    char *chr_sep = NULL;
+    char *chr_period = NULL;
+
+    int hour;
+    char hour_str[] = "00";
+
+    int min;
+    char min_str[] = "00";
+
+    unsigned int i;
+    int len_h;
+
+    if (mode) {
+	/* Find ":" */
+	chr_sep = strchr(time_12, ':');
+
+	/* Find the period marker by iterating through possible
+	   markers and searching the input string for them. */
+	for (i = 0; i < strlen((const char*)period_markers); i++) {
+	    chr_period = strchr(time_12, period_markers[i]);
+	    if (chr_period != NULL) {
+		period = tolower(period_markers[i]);
+		break;
+	    }
+	}
+
+	/* Default period, if not found in previous loop */
+	if (chr_period == NULL) {
+	    period = 'a';
+	}
+	
+	/* Extract the hour (position 0 to ':', of length 1 or 2), and
+	   convert it to an integer. */
+	len_h = (chr_sep - time_12);
+	
+	if (len_h == 1) {
+	    hour_str[1] = time_12[0];
+	} else if (len_h == 2) {
+	    hour_str[0] = time_12[0];
+	    hour_str[1] = time_12[1];
+	} else {
+	    return NULL;
+	}
+
+	hour = atoi(hour_str);
+
+	if ((period == 'p') && (hour < 12)) {
+	    hour += 12;
+	}
+
+	if ((period == 'a') && (hour == 12)) {
+	    hour = 0;
+	}
+
+	/* Establish substring for minute (':' to period marker, of length 2) */
+	min_str[0] = chr_sep[1];
+	min_str[1] = chr_sep[2];
+
+	min = atoi(min_str);
+
+	snprintf(time_tmp, time_tmp_len, "%02i:%02i", hour, min);
+
+    } else {
+	/* Watch is set to use 12 hour mode, leave it be */
+	snprintf(time_tmp, time_tmp_len, "%s", time_12);
+    }
+
+    return time_tmp;
+}
+
